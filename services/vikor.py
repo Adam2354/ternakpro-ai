@@ -602,7 +602,7 @@ def calculate_vikor(user_input, mode="pure", preset="menengah"):
     # Preset weights for adjusted scoring (modal, biaya_per_ekor, lahan, waktu, pengalaman)
     presets = {
         "pemula": np.array([0.35, 0.15, 0.25, 0.15, 0.10]),
-        "menengah": np.array([0.55, 0.05, 0.25, 0.05, 0.10]),
+        "menengah": np.array([0.40, 0.15, 0.20, 0.10, 0.15]),
         "besar": np.array([0.50, 0.05, 0.25, 0.10, 0.10])
     }
 
@@ -615,18 +615,72 @@ def calculate_vikor(user_input, mode="pure", preset="menengah"):
     user_waktu = int(user_vector["waktu"])
     user_pengalaman = int(user_vector["pengalaman"])
 
+    # ======================================
+    # FEASIBILITY CHECK YANG DIPERBAIKI
+    # ======================================
+
     feasibility_flags = []
+
     for item in livestock_data:
-        estimated_heads = _estimate_head_capacity(item, user_modal, user_lahan, reserve_ratio=0.0)
-        min_required = int(item.get("min_ekor", 1))
-        is_feasible = (
-            (user_modal >= item["modal"]) and
-            (user_lahan >= item["lahan"]) and
-            (user_waktu >= item["waktu"]) and
-            (user_pengalaman >= item["pengalaman"]) and
-            (estimated_heads >= min_required)
+
+        estimated_heads = _estimate_head_capacity(
+            item,
+            user_modal,
+            user_lahan,
+            reserve_ratio=0.0
         )
-        feasibility_flags.append(is_feasible)
+
+        min_required = int(item.get("min_ekor", 1))
+
+        # ======================================
+        # TOLERANSI REALISTIS
+        # ======================================
+
+        modal_toleransi = (
+            user_modal >= (item["modal"] * 0.7)
+        )
+
+        lahan_toleransi = (
+            user_lahan >= (item["lahan"] * 0.7)
+        )
+
+        waktu_toleransi = (
+            user_waktu >= max(
+                1,
+                item["waktu"] - 1
+            )
+        )
+
+        pengalaman_toleransi = (
+            user_pengalaman >= max(
+                1,
+                item["pengalaman"] - 1
+            )
+        )
+
+        # ======================================
+        # MINIMAL MASIH BISA MULAI
+        # ======================================
+
+        minimal_ekor_toleransi = max(
+            1,
+            math.ceil(min_required * 0.3)
+        )
+
+        is_feasible = (
+
+            modal_toleransi and
+            lahan_toleransi and
+            waktu_toleransi and
+            pengalaman_toleransi and
+            (
+                estimated_heads >= minimal_ekor_toleransi
+            )
+        )
+
+        feasibility_flags.append(
+            is_feasible
+        )
 
     matrix_aligned_f = _build_user_aligned_matrix(
         livestock_data,
