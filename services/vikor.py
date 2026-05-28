@@ -420,9 +420,20 @@ def _estimate_financial_projection(livestock, user_modal, user_lahan, reserve_ra
         "biaya_per_ekor_estimasi": biaya_per_ekor,
         "breakdown_per_ekor": breakdown_per_ekor,
         "breakdown_total_estimasi": breakdown_total,
+
+        # ======================================
+        # FIELD TAMBAHAN UNTUK FLUTTER UI
+        # ======================================
+
+        "breakdown_biaya": breakdown_total,
+        "sisa_modal": sisa_modal,
+        "estimasi_modal": modal_terpakai,
+        "estimasi_biaya_per_ekor": biaya_per_ekor,
+        # ======================================
         "potensi_keuntungan_per_ekor": potensi_keuntungan_per_ekor,
         "potensi_keuntungan_total": potensi_keuntungan_total,
     }
+
 
 
 def _compute_vikor_scores(matrix, weights, criteria_types):
