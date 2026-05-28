@@ -1,5 +1,6 @@
 import numpy as np
 import re
+import math
 
 # ======================================
 # DATA ALTERNATIF TERNAK
@@ -9,6 +10,8 @@ livestock_data = [
     {
         "name": "Ayam Petelur",
         "modal": 2500000,
+        "modal_minimal_realistis": 2500000,
+        "modal_aman": 4000000,
         "biaya_per_ekor": 220000,
         "min_ekor": 10,
         "breakdown": {
@@ -38,6 +41,8 @@ livestock_data = [
     {
         "name": "Bebek Petelur",
         "modal": 3500000,
+        "modal_minimal_realistis": 3500000,
+        "modal_aman": 5000000,
         "biaya_per_ekor": 250000,
         "min_ekor": 10,
         "breakdown": {
@@ -66,7 +71,9 @@ livestock_data = [
 
     {
         "name": "Kambing Etawa",
-        "modal": 4500000,
+        "modal": 12000000,
+        "modal_minimal_realistis": 12000000,
+        "modal_aman": 18000000,
         "biaya_per_ekor": 4800000,
         "min_ekor": 2,
         "breakdown": {
@@ -95,7 +102,9 @@ livestock_data = [
 
     {
         "name": "Domba Garut",
-        "modal": 7000000,
+        "modal": 14000000,
+        "modal_minimal_realistis": 14000000,
+        "modal_aman": 20000000,
         "biaya_per_ekor": 5500000,
         "min_ekor": 2,
         "breakdown": {
@@ -124,9 +133,11 @@ livestock_data = [
 
     {
         "name": "Sapi Limousin",
-        "modal": 30000000,
+        "modal": 75000000,
+        "modal_minimal_realistis": 75000000,
+        "modal_aman": 100000000,
         "biaya_per_ekor": 32000000,
-        "min_ekor": 1,
+        "min_ekor": 2,
         "breakdown": {
             "bibit": 22000000,
             "kandang": 5000000,
@@ -160,9 +171,9 @@ livestock_data = [
 # favor alternatives that match user's available capital for practical UX.
 weights = np.array([
     0.45,  # modal (total modal capability)
-    0.15,  # biaya_per_ekor (per-unit cost penalization)
-    0.15,  # lahan
-    0.15,  # waktu
+    0.10,  # biaya_per_ekor (per-unit cost penalization)
+    0.25,  # lahan
+    0.10,  # waktu
     0.10   # pengalaman
 ])
 
@@ -282,7 +293,6 @@ def build_compatibility_matrix(
 
 
 def _build_user_aligned_matrix(livestock_items, user_vector):
-
     user_modal = max(float(user_vector["modal"]), 1e-9)
     user_lahan = max(float(user_vector["lahan"]), 1e-9)
     user_waktu = max(float(user_vector["waktu"]), 1e-9)
@@ -291,12 +301,34 @@ def _build_user_aligned_matrix(livestock_items, user_vector):
     matrix = []
 
     for item in livestock_items:
+        item_modal = max(float(item.get("modal", 1.0)), 1e-9)
+        item_lahan = max(float(item.get("lahan", 1.0)), 1e-9)
+        item_biaya = float(item.get("biaya_per_ekor", item_modal))
+
+        # Modal & lahan as benefit: higher user capacity relative to requirement -> better score
+        modal_score = min(user_modal / item_modal, 1e6)
+        lahan_score = min(user_lahan / item_lahan, 1e6)
+
+        # biaya_per_ekor as cost: higher biaya -> worse (we normalize relative to user modal)
+        biaya_score = item_biaya / max(user_modal, 1e-9)
+
+        # waktu and pengalaman remain relative requirement (cost-like)
+        waktu_score = float(item.get("waktu", 1.0)) / user_waktu
+        pengalaman_score = float(item.get("pengalaman", 1.0)) / user_pengalaman
+
+        # Business rule: if user_modal is much larger than item_modal, prefer larger-scale items
+        # Apply a modest boost to modal_score based on log10(capacity_ratio)
+        capacity_ratio = user_modal / item_modal
+        if capacity_ratio >= 10:
+            boost = min(math.log10(capacity_ratio) / 2.0, 1.0)  # 10x -> 0.5, 100x -> 1.0
+            modal_score *= (1.0 + 0.5 * boost)
+
         matrix.append([
-            float(item["modal"]) / user_modal,
-            float(item["lahan"]) / user_lahan,
-            float(item["waktu"]) / user_waktu,
-            float(item["pengalaman"]) / user_pengalaman,
-            float(item["roi"]),
+            float(modal_score),
+            float(biaya_score),
+            float(lahan_score),
+            float(waktu_score),
+            float(pengalaman_score),
         ])
 
     return np.array(matrix, dtype=float)
@@ -311,7 +343,7 @@ def _get_reference_heads(livestock):
     if biaya_per_ekor <= 7000000:
         return 5
 
-    return 1
+    return 2
 
 
 def _estimate_land_capacity(livestock, user_lahan):
@@ -516,12 +548,15 @@ def _build_result_rows(q_values, q_values_pure=None, index_map=None, user_modal=
         livestock = livestock_data[idx]
 
         item = {
+            "index": idx,
             "ranking": rank + 1,
             "ternak": livestock["name"],
             "jenis_hewan": livestock["name"],
             "q_value": round(float(q_values[pos]), 4),
             "feasible": True,
             "modal_minimum": livestock["modal"],
+            "modal_minimal_realistis": livestock.get("modal_minimal_realistis", livestock["modal"]),
+            "modal_aman": livestock.get("modal_aman", livestock["modal"]),
             "lahan_minimum": livestock["lahan"],
             "waktu_perawatan": livestock["waktu"],
             "pengalaman_minimum": livestock["pengalaman"],
@@ -566,9 +601,9 @@ def calculate_vikor(user_input, mode="pure", preset="menengah"):
 
     # Preset weights for adjusted scoring (modal, biaya_per_ekor, lahan, waktu, pengalaman)
     presets = {
-        "pemula": np.array([0.30, 0.35, 0.15, 0.10, 0.10]),
-        "menengah": np.array([0.40, 0.20, 0.15, 0.15, 0.10]),
-        "besar": np.array([0.45, 0.15, 0.15, 0.15, 0.10])
+        "pemula": np.array([0.35, 0.15, 0.25, 0.15, 0.10]),
+        "menengah": np.array([0.55, 0.05, 0.25, 0.05, 0.10]),
+        "besar": np.array([0.50, 0.05, 0.25, 0.10, 0.10])
     }
 
     pure_weights = presets.get(preset, presets["menengah"])
@@ -615,15 +650,17 @@ def calculate_vikor(user_input, mode="pure", preset="menengah"):
         )
 
         for i, it in enumerate(results_feasible):
-            item = livestock_data[i]
-            it["feasible"] = bool(feasibility_flags[i])
+            idx = it.get("index", i)
+            item = livestock_data[idx]
+            feasible_flag = bool(feasibility_flags[idx])
+            it["feasible"] = feasible_flag
             it.update(
                 _estimate_financial_projection(
                     item,
                     user_modal,
                     user_lahan,
                     reserve_ratio=0.02,
-                    feasible=it["feasible"]
+                    feasible=feasible_flag
                 )
             )
 
@@ -659,15 +696,17 @@ def calculate_vikor(user_input, mode="pure", preset="menengah"):
         )
 
         for i, it in enumerate(results_feasible):
-            item = livestock_data[i]
-            it["feasible"] = bool(feasibility_flags[i])
+            idx = it.get("index", i)
+            item = livestock_data[idx]
+            feasible_flag = bool(feasibility_flags[idx])
+            it["feasible"] = feasible_flag
             it.update(
                 _estimate_financial_projection(
                     item,
                     user_modal,
                     user_lahan,
                     reserve_ratio=0.02,
-                    feasible=it["feasible"]
+                    feasible=feasible_flag
                 )
             )
 
@@ -687,3 +726,16 @@ def calculate_vikor(user_input, mode="pure", preset="menengah"):
         return results_feasible
 
     return calculate_vikor(user_input, mode="normal")
+
+
+def get_startup_cost_table():
+    return [
+        {
+            "ternak": item["name"],
+            "minimal_realistis": item.get("modal_minimal_realistis", item["modal"]),
+            "modal_aman": item.get("modal_aman", item["modal"]),
+            "min_ekor": item.get("min_ekor", 1),
+            "biaya_per_ekor": item.get("biaya_per_ekor", item["modal"]),
+        }
+        for item in livestock_data
+    ]
