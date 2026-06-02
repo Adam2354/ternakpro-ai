@@ -1,6 +1,5 @@
 import numpy as np
 import re
-import math
 
 # ======================================
 # DATA ALTERNATIF TERNAK
@@ -167,14 +166,18 @@ livestock_data = [
 # BOBOT KRITERIA
 # ======================================
 
-# Adjusted weights (recommended): prioritize total modal so recommendations
-# favor alternatives that match user's available capital for practical UX.
+# Kriteria:
+# C1 = Modal
+# C2 = Lahan
+# C3 = Waktu Perawatan
+# C4 = Pengalaman
+# C5 = Kapasitas Usaha
 weights = np.array([
-    0.45,  # modal (total modal capability)
-    0.10,  # biaya_per_ekor (per-unit cost penalization)
+    0.35,  # modal
     0.25,  # lahan
-    0.10,  # waktu
-    0.10   # pengalaman
+    0.15,  # waktu
+    0.10,  # pengalaman
+    0.15,  # kapasitas_usaha
 ])
 
 # ======================================
@@ -292,46 +295,45 @@ def build_compatibility_matrix(
     return compatibility
 
 
-def _build_user_aligned_matrix(livestock_items, user_vector):
-    user_modal = max(float(user_vector["modal"]), 1e-9)
-    user_lahan = max(float(user_vector["lahan"]), 1e-9)
-    user_waktu = max(float(user_vector["waktu"]), 1e-9)
-    user_pengalaman = max(float(user_vector["pengalaman"]), 1e-9)
-
+def build_decision_matrix(user_vector):
     matrix = []
 
-    for item in livestock_items:
-        item_modal = max(float(item.get("modal", 1.0)), 1e-9)
-        item_lahan = max(float(item.get("lahan", 1.0)), 1e-9)
-        item_biaya = float(item.get("biaya_per_ekor", item_modal))
+    max_modal = max(x["modal"] for x in livestock_data)
+    max_lahan = max(x["lahan"] for x in livestock_data)
 
-        # Modal & lahan as benefit: higher user capacity relative to requirement -> better score
-        modal_score = min(user_modal / item_modal, 1e6)
-        lahan_score = min(user_lahan / item_lahan, 1e6)
+    user_modal = float(user_vector["modal"])
+    user_lahan = float(user_vector["lahan"])
+    user_waktu = float(user_vector["waktu"])
+    user_pengalaman = float(user_vector["pengalaman"])
 
-        # biaya_per_ekor as cost: higher biaya -> worse (we normalize relative to user modal)
-        biaya_score = item_biaya / max(user_modal, 1e-9)
+    for item in livestock_data:
+        modal_score = min(user_modal / item["modal"], 1.0)
 
-        # waktu and pengalaman remain relative requirement (cost-like)
-        waktu_score = float(item.get("waktu", 1.0)) / user_waktu
-        pengalaman_score = float(item.get("pengalaman", 1.0)) / user_pengalaman
+        lahan_score = min(user_lahan / item["lahan"], 1.0)
+        waktu_score = min(user_waktu / item["waktu"], 1.0)
+        pengalaman_score = min(user_pengalaman / item["pengalaman"], 1.0)
 
-        # Business rule: if user_modal is much larger than item_modal, prefer larger-scale items
-        # Apply a modest boost to modal_score based on log10(capacity_ratio)
-        capacity_ratio = user_modal / item_modal
-        if capacity_ratio >= 10:
-            boost = min(math.log10(capacity_ratio) / 2.0, 1.0)  # 10x -> 0.5, 100x -> 1.0
-            modal_score *= (1.0 + 0.5 * boost)
+        user_capacity = (
+            0.5 * min(user_modal / max_modal, 1.0) +
+            0.5 * min(user_lahan / max_lahan, 1.0)
+        )
+
+        livestock_capacity = (
+            0.5 * (item["modal"] / max_modal) +
+            0.5 * (item["lahan"] / max_lahan)
+        )
+
+        kapasitas_usaha_score = 1 - abs(user_capacity - livestock_capacity)
 
         matrix.append([
-            float(modal_score),
-            float(biaya_score),
-            float(lahan_score),
-            float(waktu_score),
-            float(pengalaman_score),
+            modal_score,
+            lahan_score,
+            waktu_score,
+            pengalaman_score,
+            kapasitas_usaha_score,
         ])
 
-    return np.array(matrix, dtype=float)
+    return np.array(matrix)
 
 
 def _get_reference_heads(livestock):
@@ -598,188 +600,61 @@ def _build_result_rows(q_values, q_values_pure=None, index_map=None, user_modal=
 def calculate_vikor(user_input, mode="pure", preset="menengah"):
 
     user_vector = convert_user_input(user_input)
-
-    # Preset weights for adjusted scoring (modal, biaya_per_ekor, lahan, waktu, pengalaman)
-    presets = {
-        "pemula": np.array([0.35, 0.15, 0.25, 0.15, 0.10]),
-        "menengah": np.array([0.40, 0.15, 0.20, 0.10, 0.15]),
-        "besar": np.array([0.50, 0.05, 0.25, 0.10, 0.10])
-    }
-
-    pure_weights = presets.get(preset, presets["menengah"])
-
-    # Feasibility is used as a status flag, but scoring runs on the full set so
-    # Q stays a continuous ranking signal even when only a few items are feasible.
     user_modal = float(user_vector["modal"])
     user_lahan = float(user_vector["lahan"])
     user_waktu = int(user_vector["waktu"])
     user_pengalaman = int(user_vector["pengalaman"])
 
-    # ======================================
-    # FEASIBILITY CHECK YANG DIPERBAIKI
-    # ======================================
+    decision_matrix = build_decision_matrix(user_vector)
 
-    feasibility_flags = []
-
-    for item in livestock_data:
-
-        estimated_heads = _estimate_head_capacity(
-            item,
-            user_modal,
-            user_lahan,
-            reserve_ratio=0.0
-        )
-
-        min_required = int(item.get("min_ekor", 1))
-
-        # ======================================
-        # TOLERANSI REALISTIS
-        # ======================================
-
-        modal_toleransi = (
-            user_modal >= (item["modal"] * 0.7)
-        )
-
-        lahan_toleransi = (
-            user_lahan >= (item["lahan"] * 0.7)
-        )
-
-        waktu_toleransi = (
-            user_waktu >= max(
-                1,
-                item["waktu"] - 1
-            )
-        )
-
-        pengalaman_toleransi = (
-            user_pengalaman >= max(
-                1,
-                item["pengalaman"] - 1
-            )
-        )
-
-        # ======================================
-        # MINIMAL MASIH BISA MULAI
-        # ======================================
-
-        minimal_ekor_toleransi = max(
-            1,
-            math.ceil(min_required * 0.3)
-        )
-
-        is_feasible = (
-
-            modal_toleransi and
-            lahan_toleransi and
-            waktu_toleransi and
-            pengalaman_toleransi and
-            (
-                estimated_heads >= minimal_ekor_toleransi
-            )
-        )
-
-        feasibility_flags.append(
-            is_feasible
-        )
-
-    matrix_aligned_f = _build_user_aligned_matrix(
-        livestock_data,
-        user_vector
+    q_values = _compute_vikor_scores(
+        decision_matrix,
+        weights,
+        ["benefit", "benefit", "benefit", "benefit", "benefit"]
     )
 
-    if mode == "pure":
-        q_pure = _compute_vikor_scores(
-            matrix_aligned_f,
-            pure_weights,
-            ["cost", "cost", "cost", "cost", "benefit"]
+    results = _build_result_rows(
+        q_values,
+        q_values_pure=q_values,
+        index_map=list(range(len(livestock_data))),
+        user_modal=user_modal,
+        user_lahan=user_lahan,
+        reserve_ratio=0.02
+    )
+
+    for item in results:
+        idx = item.get("index")
+        livestock = livestock_data[idx]
+
+        item["feasible"] = (
+            user_modal >= livestock["modal"] and
+            user_lahan >= livestock["lahan"] and
+            user_waktu >= livestock["waktu"] and
+            user_pengalaman >= livestock["pengalaman"]
         )
 
-        results_feasible = _build_result_rows(
-            q_pure,
-            q_values_pure=q_pure,
-            index_map=list(range(len(livestock_data))),
-            user_modal=user_modal,
-            user_lahan=user_lahan,
-            reserve_ratio=0.02
-        )
-
-        for i, it in enumerate(results_feasible):
-            idx = it.get("index", i)
-            item = livestock_data[idx]
-            feasible_flag = bool(feasibility_flags[idx])
-            it["feasible"] = feasible_flag
-            it.update(
-                _estimate_financial_projection(
-                    item,
-                    user_modal,
-                    user_lahan,
-                    reserve_ratio=0.02,
-                    feasible=feasible_flag
-                )
-            )
-
-        results_feasible = sorted(
-            results_feasible,
-            key=lambda item: (
-                0 if item.get("feasible", False) else 1,
-                item.get("q_value", 1.0),
-                -float(item.get("roi", 0.0)),
-                float(item.get("biaya_per_ekor", 0.0))
+        item.update(
+            _estimate_financial_projection(
+                livestock,
+                user_modal,
+                user_lahan,
+                reserve_ratio=0.02,
+                feasible=item["feasible"]
             )
         )
 
-        for i, it in enumerate(results_feasible):
-            it["ranking"] = i + 1 if it.get("feasible", True) else None
-
-        return results_feasible
-
-    if mode == "normal":
-        q_normal_f = _compute_vikor_scores(
-            matrix_aligned_f,
-            presets.get(preset, presets["menengah"]),
-            ["cost", "cost", "cost", "cost", "benefit"]
+    results = sorted(
+        results,
+        key=lambda item: (
+            0 if item.get("feasible", False) else 1,
+            item.get("q_value", 1.0)
         )
+    )
 
-        results_feasible = _build_result_rows(
-            q_normal_f,
-            q_values_pure=None,
-            index_map=list(range(len(livestock_data))),
-            user_modal=user_modal,
-            user_lahan=user_lahan,
-            reserve_ratio=0.02
-        )
+    for i, item in enumerate(results):
+        item["ranking"] = i + 1
 
-        for i, it in enumerate(results_feasible):
-            idx = it.get("index", i)
-            item = livestock_data[idx]
-            feasible_flag = bool(feasibility_flags[idx])
-            it["feasible"] = feasible_flag
-            it.update(
-                _estimate_financial_projection(
-                    item,
-                    user_modal,
-                    user_lahan,
-                    reserve_ratio=0.02,
-                    feasible=feasible_flag
-                )
-            )
-
-        results_feasible = sorted(
-            results_feasible,
-            key=lambda item: (
-                0 if item.get("feasible", False) else 1,
-                item.get("q_value", 1.0),
-                -float(item.get("roi", 0.0)),
-                float(item.get("biaya_per_ekor", 0.0))
-            )
-        )
-
-        for i, it in enumerate(results_feasible):
-            it["ranking"] = i + 1 if it.get("feasible", True) else None
-
-        return results_feasible
-
-    return calculate_vikor(user_input, mode="normal")
+    return results
 
 
 def get_startup_cost_table():
