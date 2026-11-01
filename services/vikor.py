@@ -660,8 +660,14 @@ def calculate_vikor(user_input, mode="pure", preset="menengah"):
                 user_modal,
                 user_lahan,
                 reserve_ratio=0.02,
-                feasible=item["feasible"]
+                feasible=True
             )
+        )
+        item["modal_cukup_1_ekor"] = (
+            user_modal >= item["biaya_per_ekor_estimasi"]
+        )
+        item["modal_cukup_minimum_usaha"] = (
+            user_modal >= livestock["modal"]
         )
 
     results = sorted(
