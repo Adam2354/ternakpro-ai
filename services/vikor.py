@@ -81,7 +81,7 @@ livestock_data = [
             "pakan_awal": 800000,
             "lainnya": 300000
         },
-        "lahan": 10,
+        "lahan": 12,
         "waktu": 3,
         "pengalaman": 3,
         "roi": 25,
@@ -184,11 +184,19 @@ weights = np.array([
 # KONVERSI INPUT USER
 # ======================================
 pengalaman_map = {
-    "belum": 1,
+    "belum pernah": 1,
     "kurang_1_tahun": 2,
     "1_3_tahun": 3,
     "3_5_tahun": 4,
     "lebih_5_tahun": 5
+}
+
+TIME_MAPPING = {
+    "< 1 jam/hari": 1,
+    "1 - 2 jam/hari": 2,
+    "2 - 4 jam/hari": 3,
+    "4 - 6 jam/hari": 4,
+    "> 6 jam/hari": 5,
 }
 
 
@@ -247,12 +255,26 @@ def _parse_experience(value):
         return 1
 
 
+def _parse_time(value):
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        time_mapping = {
+            key.lower(): mapped_value
+            for key, mapped_value in TIME_MAPPING.items()
+        }
+
+        if normalized in time_mapping:
+            return time_mapping[normalized]
+
+    return int(_parse_number(value))
+
+
 def convert_user_input(data):
 
     return {
         "modal": _parse_number(data["modal"]),
         "lahan": _parse_number(data["lahan"]),
-        "waktu": int(_parse_number(data["waktu"])),
+        "waktu": _parse_time(data["waktu"]),
         "pengalaman": _parse_experience(data.get("pengalaman", 1)),
     }
 

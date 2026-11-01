@@ -6,6 +6,7 @@ from fastapi.middleware.cors import (
 )
 
 from pydantic import BaseModel
+from typing import Union
 
 from services.vikor import (
     calculate_vikor
@@ -53,7 +54,7 @@ class VikorRequest(BaseModel):
 
     lahan: float
 
-    waktu: int
+    waktu: Union[str, int]
 
     pengalaman: str
 
