@@ -562,7 +562,6 @@ def _build_result_rows(q_values, q_values_pure=None, index_map=None, user_modal=
             "lahan_minimum": livestock["lahan"],
             "waktu_perawatan": livestock["waktu"],
             "pengalaman_minimum": livestock["pengalaman"],
-            "roi": livestock["roi"],
             "biaya_awal": livestock["modal"],
             "biaya_per_ekor": livestock.get("biaya_per_ekor", livestock["modal"]),
             "potensi_keuntungan": round(((
